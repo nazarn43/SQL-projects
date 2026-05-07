@@ -20,6 +20,85 @@
 -- writes audit logs,
 -- and returns processing results.
 
+    CREATE TABLE dbo.Task1_Products (
+    IdProduct INT IDENTITY(1,1) PRIMARY KEY,
+    ProductName NVARCHAR(120) NOT NULL,
+    UnitPrice DECIMAL(10,2) NOT NULL CHECK (UnitPrice >= 0),
+    UnitsInStock INT NOT NULL CHECK (UnitsInStock >= 0),
+    IsDiscontinued BIT NOT NULL DEFAULT 0
+);
+GO
+
+CREATE TABLE dbo.Task1_SalesOrders (
+    IdOrder INT NOT NULL PRIMARY KEY,
+    CustomerName NVARCHAR(120) NOT NULL,
+    OrderDate DATE NOT NULL,
+    Status NVARCHAR(30) NOT NULL,
+    TotalAmount DECIMAL(10,2) NULL,
+    PaidAmount DECIMAL(10,2) NULL,
+    PaidAt DATETIME2(0) NULL,
+    ProcessedBy NVARCHAR(80) NULL
+);
+GO
+
+CREATE TABLE dbo.Task1_OrderItems (
+    IdOrderItem INT IDENTITY(1,1) PRIMARY KEY,
+    IdOrder INT NOT NULL,
+    IdProduct INT NOT NULL,
+    Quantity INT NOT NULL CHECK (Quantity > 0),
+    UnitPriceAtOrder DECIMAL(10,2) NOT NULL CHECK (UnitPriceAtOrder >= 0),
+    LineStatus NVARCHAR(30) NOT NULL DEFAULT N'Waiting',
+    CONSTRAINT FK_Task1_OrderItems_Orders
+        FOREIGN KEY (IdOrder) REFERENCES dbo.Task1_SalesOrders(IdOrder),
+    CONSTRAINT FK_Task1_OrderItems_Products
+        FOREIGN KEY (IdProduct) REFERENCES dbo.Task1_Products(IdProduct)
+);
+GO
+
+CREATE TABLE dbo.Task1_OrderAudit (
+    IdAudit INT IDENTITY(1,1) PRIMARY KEY,
+    IdOrder INT NULL,
+    AuditLevel NVARCHAR(20) NOT NULL,
+    Message NVARCHAR(300) NOT NULL,
+    CreatedAt DATETIME2(0) NOT NULL DEFAULT SYSDATETIME(),
+    CreatedBy NVARCHAR(80) NULL
+);
+GO
+
+INSERT INTO dbo.Task1_Products (ProductName, UnitPrice, UnitsInStock, IsDiscontinued)
+VALUES
+    (N'SQL Workbook', 49.00, 20, 0),
+    (N'Database Lab Seat', 120.00, 8, 0),
+    (N'Legacy DVD Course', 20.00, 100, 1),
+    (N'Data Modeling Poster', 15.00, 2, 0);
+GO
+
+INSERT INTO dbo.Task1_SalesOrders (IdOrder, CustomerName, OrderDate, Status, TotalAmount, PaidAmount)
+VALUES
+    (1001, N'Northwind Academy', '2026-04-01', N'PendingPayment', NULL, NULL),
+    (1002, N'Contoso School', '2026-04-02', N'PendingPayment', NULL, NULL),
+    (1003, N'Fabrikam Training', '2026-04-03', N'Paid', 169.00, 169.00),
+    (1004, N'Adventure Works College', '2026-04-04', N'PendingPayment', NULL, NULL);
+GO
+
+INSERT INTO dbo.Task1_OrderItems (IdOrder, IdProduct, Quantity, UnitPriceAtOrder)
+VALUES
+    (1001, 1, 2, 49.00),
+    (1001, 2, 1, 120.00),
+    (1002, 4, 5, 15.00),
+    (1003, 1, 1, 49.00),
+    (1003, 2, 1, 120.00),
+    (1004, 3, 1, 20.00);
+GO
+
+SELECT 'Task 1 setup completed' AS Message;
+SELECT * FROM dbo.Task1_Products;
+SELECT * FROM dbo.Task1_SalesOrders;
+SELECT * FROM dbo.Task1_OrderItems;
+GO
+
+    
+
 
 CREATE OR ALTER PROCEDURE dbo.usp_SettleOrderPayment
     @IdOrder INT,
@@ -166,8 +245,7 @@ BEGIN
             p.UnitsInStock - oi.Quantity
         FROM Task1_Products p
         INNER JOIN Task1_OrderItems oi
-            ON p.
-[08.05.2026 00:18] Nazar: IdProduct = oi.IdProduct
+            ON p. IdProduct = oi.IdProduct
         WHERE oi.IdOrder = @IdOrder;
 
 
@@ -312,3 +390,18 @@ SELECT
     @OrderTotal AS OrderTotal,
     @FulfilledItems AS FulfilledItems,
     @StatusMessage AS StatusMessage;
+-- =============================================
+-- Clean up example
+-- =============================================
+
+DROP PROCEDURE IF EXISTS dbo.usp_SettleOrderPayment;
+GO
+
+DROP TABLE IF EXISTS dbo.Task1_OrderAudit;
+DROP TABLE IF EXISTS dbo.Task1_OrderItems;
+DROP TABLE IF EXISTS dbo.Task1_SalesOrders;
+DROP TABLE IF EXISTS dbo.Task1_Products;
+GO
+
+SELECT 'Task 1 objects removed' AS Message;
+GO
