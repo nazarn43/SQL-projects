@@ -1,0 +1,283 @@
+[08.05.2026 19:42] Nazar:
+
+--------------------------------------------------
+-- 1. CREATE AUDIT TABLES
+
+IF NOT EXISTS (
+    SELECT *
+    FROM sys.tables
+    WHERE name = 'FlightCancellations'
+)
+BEGIN
+    CREATE TABLE FlightCancellations
+    (
+        CancellationID INT IDENTITY(1,1) PRIMARY KEY,
+        FlightNumber VARCHAR(10),
+        DepartureAirport CHAR(3),
+        ArrivalAirport CHAR(3),
+        OriginalDepartureTime DATETIME,
+        CancellationTime DATETIME DEFAULT GETDATE()
+    );
+END;
+
+
+IF NOT EXISTS (
+    SELECT *
+    FROM sys.tables
+    WHERE name = 'PassengerNotifications'
+)
+BEGIN
+    CREATE TABLE PassengerNotifications
+    (
+        NotificationID INT IDENTITY(1,1) PRIMARY KEY,
+        PassengerID INT,
+        FlightNumber VARCHAR(10),
+        NotificationType VARCHAR(50),
+        NotificationMessage VARCHAR(500),
+        NotificationTime DATETIME DEFAULT GETDATE(),
+        IsRead BIT DEFAULT 0
+    );
+END;
+
+--------------------------------------------------
+-- 2. TRIGGER: VALIDATE BOOKINGS
+
+CREATE TRIGGER tr_ValidateBooking
+ON Bookings
+INSTEAD OF INSERT
+AS
+BEGIN
+
+    --------------------------------------------------
+    -- Flight exists
+
+    IF EXISTS (
+        SELECT 1
+        FROM inserted i
+        LEFT JOIN Flights f
+            ON i.FlightID = f.FlightID
+        WHERE f.FlightID IS NULL
+    )
+    BEGIN
+        RAISERROR('This flight does not exist',16,1);
+        ROLLBACK;
+        RETURN;
+    END;
+
+    --------------------------------------------------
+    -- Passenger exists
+
+    IF EXISTS (
+        SELECT 1
+        FROM inserted i
+        LEFT JOIN Passengers p
+            ON i.PassengerID = p.PassengerID
+        WHERE p.PassengerID IS NULL
+    )
+    BEGIN
+        RAISERROR('This passenger does not exist',16,1);
+        ROLLBACK;
+        RETURN;
+    END;
+
+    --------------------------------------------------
+    -- Price cannot be negative
+
+    IF EXISTS (
+        SELECT 1
+        FROM inserted
+        WHERE Price < 0
+    )
+    BEGIN
+        RAISERROR('Price cannot be negative',16,1);
+        ROLLBACK;
+        RETURN;
+    END;
+
+    --------------------------------------------------
+    -- Flight capacity validation
+
+    IF EXISTS (
+        SELECT 1
+        FROM inserted i
+        WHERE (
+            SELECT COUNT(*)
+            FROM Bookings b
+            WHERE b.FlightID = i.FlightID
+        ) >= 100
+    )
+    BEGIN
+        RAISERROR('Flight is fully booked',16,1);
+        ROLLBACK;
+        RETURN;
+    END;
+
+    --------------------------------------------------
+    -- Insert booking
+
+    INSERT INTO Bookings
+    (
+        FlightID,
+        PassengerID,
+        SeatNumber,
+        BookingDate,
+        Class,
+        Price,
+        CheckedIn
+    )
+    SELECT
+        FlightID,
+        PassengerID,
+        SeatNumber,
+        BookingDate,
+        Class,
+        Price,
+        CheckedIn
+    FROM inserted;
+
+END;
+
+--------------------------------------------------
+-- 3. TRIGGER: TRACK FLIGHT CANCELLATIONS
+
+CREATE TRIGGER tr_TrackFlightCancellations
+ON Flights
+INSTEAD OF DELETE
+AS
+BEGIN
+
+    --------------------------------------------------
+    -- Prevent cancellation within 24 hours
+
+    IF EXISTS (
+        SELECT 1
+        FROM deleted
+        WHERE DepartureTime <= DATEADD(HOUR,24,GETDATE())
+    )
+    BEGIN
+        RAISERROR('Cannot cancel flight within 24 hours',16,1);
+        ROLLBACK;
+        RETURN;
+    END;
+
+    --------------------------------------------------
+    -- Save deleted flights
+
+    INSERT INTO FlightCancellations
+    (
+        FlightNumber,
+        DepartureAirport,
+        ArrivalAirport,
+        OriginalDepartureTime
+    )
+    SELECT
+        FlightNumber,
+        DepartureAirport,
+        ArrivalAirport,
+        DepartureTime
+    FROM deleted;
+
+    --------------------------------------------------
+    -- Create passenger notifications
+
+    INSERT INTO PassengerNotifications
+    (
+        PassengerID,
+        FlightNumber,
+        NotificationType,
+        NotificationMessage
+    )
+    SELECT
+        b.PassengerID,
+        d.FlightNumber,
+        'FlightCancelled',
+
+        'Your flight ' + d.
+[08.05.2026 19:42] Nazar: FlightNumber +
+        ' from ' + d.DepartureAirport +
+        ' to ' + d.ArrivalAirport +
+        ' has been cancelled.'
+
+    FROM deleted d
+    JOIN Bookings b
+        ON d.FlightID = b.FlightID;
+
+    --------------------------------------------------
+    -- Delete flight
+
+    DELETE FROM Flights
+    WHERE FlightID IN (
+        SELECT FlightID
+        FROM deleted
+    );
+
+END;
+
+--------------------------------------------------
+-- TESTS
+
+--------------------------------------------------
+-- Test invalid flight
+
+INSERT INTO Bookings
+(
+    FlightID,
+    PassengerID,
+    SeatNumber,
+    BookingDate,
+    Class,
+    Price,
+    CheckedIn
+)
+VALUES
+(
+    999,
+    1,
+    '10A',
+    GETDATE(),
+    'Economy',
+    200,
+    0
+);
+
+--------------------------------------------------
+-- Test negative price
+
+INSERT INTO Bookings
+(
+    FlightID,
+    PassengerID,
+    SeatNumber,
+    BookingDate,
+    Class,
+    Price,
+    CheckedIn
+)
+VALUES
+(
+    1,
+    1,
+    '11A',
+    GETDATE(),
+    'Economy',
+    -50,
+    0
+);
+
+--------------------------------------------------
+-- Test flight deletion
+
+DELETE FROM Flights
+WHERE FlightID = 1;
+
+--------------------------------------------------
+-- Check audit table
+
+SELECT *
+FROM FlightCancellations;
+
+--------------------------------------------------
+-- Check notifications
+
+SELECT *
+FROM PassengerNotifications;
